@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Garage Organizer</title>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #f8fafc;
+      min-height: 100vh;
+    }
+
+    /* Config Banner */
+    .config-banner {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border-bottom: 2px solid #f59e0b;
+      padding: 16px 20px;
+    }
+
+    .config-banner h3 {
+      color: #92400e;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+
+    .config-banner p {
+      color: #a16207;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .config-banner code {
+      background: rgba(0,0,0,0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+
+    /* Header */
+    .header {
+      background-color: #1e293b;
+      color: white;
+      padding: 16px 20px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .header h1 {
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .header-subtitle {
+      font-size: 14px;
+      opacity: 0.8;
+      margin-top: 4px;
+    }
+
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .user-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.3);
+    }
+
+    .sign-out-btn {
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: white;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    /* Login Screen */
+    .login-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 80vh;
+      padding: 40px 20px;
+      text-align: center;
+    }
+
+    .login-icon {
+      font-size: 64px;
+      margin-bottom: 24px;
+    }
+
+    .login-title {
+      font-size: 24px;
+      font-weight: 600;
+      color: #1e293b;
+      margin-bottom: 8px;
+    }
+
+    .login-subtitle {
+      font-size: 16px;
+      color: #64748b;
+      margin-bottom: 32px;
+    }
+
+    .google-btn {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: white;
+      border: 2px solid #e2e8f0;
+      padding: 14px 28px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .google-btn:hover {
+      border-color: #3b82f6;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+    }
+
+    .google-btn img {
+      width: 24px;
+      height: 24px;
+    }
+
+    /* Filter Chips */
+    .filter-bar {
+      display: flex;
+      gap: 10px;
+      padding: 16px 20px;
+      overflow-x: auto;
+      background: white;
+      border-bottom: 1px solid #e2e8f0;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .filter-chip {
+      padding: 8px 16px;
+      border-radius: 20px;
+      border: none;
+      background-color: #e2e8f0;
+      color: #475569;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+
+    .filter-chip.active {
+      background-color: #3b82f6;
+      color: white;
+    }
+
+    /* Status Filter */
+    .status-bar {
+      display: flex;
+      gap: 8px;
+      padding: 12px 20px;
+      background: #f1f5f9;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .status-chip {
+      padding: 6px 12px;
+      border-radius: 16px;
+      border: 2px solid transparent;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+
+    .status-chip.to-sort { background: #f1f5f9; color: #64748b; }
+    .status-chip.keep { background: #dcfce7; color: #166534; }
+    .status-chip.sell { background: #dbeafe; color: #1e40af; }
+    .status-chip.donate { background: #fae8ff; color: #86198f; }
+    .status-chip.dump { background: #fee2e2; color: #991b1b; }
+
+    .status-chip.active {
+      border-color: #1e293b;
+    }
+
+    /* Items List */
+    .items-container {
+      padding: 16px 20px;
+      padding-bottom: 120px;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #64748b;
+    }
+
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
+    .item-card {
+      background: white;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    .item-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+
+    .item-name {
+      font-size: 16px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+
+    .item-delete {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      opacity: 0.4;
+      padding: 4px;
+    }
+
+    .item-tags {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .tag {
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .tag.category { background: #dbeafe; color: #1e40af; }
+    .tag.location { background: #fef3c7; color: #92400e; }
+
+    /* Decision Buttons */
+    .decision-buttons {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .decision-btn {
+      flex: 1;
+      min-width: 70px;
+      padding: 10px 8px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: white;
+    }
+
+    .decision-btn.selected {
+      border-width: 2px;
+    }
+
+    .decision-btn.keep { color: #166534; }
+    .decision-btn.keep.selected { background: #dcfce7; border-color: #166534; }
+
+    .decision-btn.sell { color: #1e40af; }
+    .decision-btn.sell.selected { background: #dbeafe; border-color: #1e40af; }
+
+    .decision-btn.donate { color: #86198f; }
+    .decision-btn.donate.selected { background: #fae8ff; border-color: #86198f; }
+
+    .decision-btn.dump { color: #991b1b; }
+    .decision-btn.dump.selected { background: #fee2e2; border-color: #991b1b; }
+
+    /* Destination Input */
+    .destination-input {
+      margin-top: 10px;
+      width: 100%;
+      padding: 10px 12px;
+      border: 2px solid #dcfce7;
+      border-radius: 8px;
+      font-size: 14px;
+      outline: none;
+    }
+
+    .destination-input:focus {
+      border-color: #166534;
+    }
+
+    /* Add Button */
+    .add-btn {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background-color: #3b82f6;
+      color: white;
+      border: none;
+      font-size: 32px;
+      font-weight: 300;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.3);
+      z-index: 150;
+    }
+
+    .modal {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: white;
+      border-top-left-radius: 20px;
+      border-top-right-radius: 20px;
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
+      padding: 24px 20px 40px;
+      z-index: 200;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 24px;
+      cursor: pointer;
+      color: #64748b;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      color: #475569;
+    }
+
+    .form-input, .form-select {
+      width: 100%;
+      padding: 14px 16px;
+      font-size: 16px;
+      border: 2px solid #e2e8f0;
+      border-radius: 10px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .form-input:focus, .form-select:focus {
+      border-color: #3b82f6;
+    }
+
+    .submit-btn {
+      width: 100%;
+      padding: 16px;
+      font-size: 16px;
+      font-weight: 600;
+      background-color: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+
+    .submit-btn:disabled {
+      background-color: #cbd5e1;
+      cursor: not-allowed;
+    }
+
+    .form-hint {
+      text-align: center;
+      font-size: 13px;
+      color: #94a3b8;
+      margin-top: 8px;
+    }
+
+    /* Loading */
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 60vh;
+      color: #64748b;
+    }
+
+    /* Progress Stats */
+    .progress-bar {
+      background: white;
+      padding: 16px 20px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .progress-stats {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      color: #64748b;
+      margin-bottom: 8px;
+    }
+
+    .progress-track {
+      height: 8px;
+      background: #e2e8f0;
+      border-radius: 4px;
+      overflow: hidden;
+      display: flex;
+    }
+
+    .progress-segment {
+      height: 100%;
+      transition: width 0.3s;
+    }
+
+    .progress-segment.keep { background: #22c55e; }
+    .progress-segment.sell { background: #3b82f6; }
+    .progress-segment.donate { background: #d946ef; }
+    .progress-segment.dump { background: #ef4444; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    // ============================================
+    // FIREBASE CONFIGURATION
+    // ============================================
+    // Replace this with your Firebase project config
+    // Get it from: Firebase Console > Project Settings > Your Apps > Config
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    // Check if Firebase is configured
+    const isConfigured = firebaseConfig.apiKey !== "YOUR_API_KEY";
+
+    // Initialize Firebase only if configured
+    let auth = null;
+    let db = null;
+
+    if (isConfigured) {
+      firebase.initializeApp(firebaseConfig);
+      auth = firebase.auth();
+      db = firebase.firestore();
+    }
+
+    // ============================================
+    // APP STATE
+    // ============================================
+    const CATEGORIES = [
+      'Kitchen Items', 'Lamps & Lighting', 'Office Supplies', 'Furniture',
+      'Sporting Goods', 'Electronics', 'Tools', 'Decor', 'Clothing',
+      'Books & Media', 'Holiday Items', 'Outdoor/Garden', 'Other'
+    ];
+
+    const STATUSES = ['To Sort', 'Keep', 'Sell', 'Donate', 'Dump'];
+
+    let state = {
+      user: null,
+      items: [],
+      loading: true,
+      showForm: false,
+      categoryFilter: 'all',
+      statusFilter: 'all',
+      newItem: { name: '', category: 'Kitchen Items', location: '' }
+    };
+
+    // ============================================
+    // FIRESTORE OPERATIONS
+    // ============================================
+    function getItemsCollection() {
+      return db.collection('users').doc(state.user.uid).collection('items');
+    }
+
+    async function loadItems() {
+      if (!isConfigured || !state.user) return;
+
+      try {
+        const snapshot = await getItemsCollection().orderBy('createdAt', 'desc').get();
+        state.items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        render();
+      } catch (error) {
+        console.error('Error loading items:', error);
+      }
+    }
+
+    async function addItem(item) {
+      if (!isConfigured || !state.user) return;
+
+      try {
+        const docRef = await getItemsCollection().add({
+          ...item,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        state.items.unshift({ id: docRef.id, ...item, createdAt: new Date() });
+        render();
+      } catch (error) {
+        console.error('Error adding item:', error);
+      }
+    }
+
+    async function updateItem(id, updates) {
+      if (!isConfigured || !state.user) return;
+
+      try {
+        await getItemsCollection().doc(id).update(updates);
+        const index = state.items.findIndex(item => item.id === id);
+        if (index !== -1) {
+          state.items[index] = { ...state.items[index], ...updates };
+          render();
+        }
+      } catch (error) {
+        console.error('Error updating item:', error);
+      }
+    }
+
+    async function deleteItem(id) {
+      if (!isConfigured || !state.user) return;
+
+      try {
+        await getItemsCollection().doc(id).delete();
+        state.items = state.items.filter(item => item.id !== id);
+        render();
+      } catch (error) {
+        console.error('Error deleting item:', error);
+      }
+    }
+
+    // ============================================
+    // AUTH
+    // ============================================
+    function signInWithGoogle() {
+      if (!isConfigured) {
+        alert('Please configure Firebase first. See the setup instructions.');
+        return;
+      }
+      const provider = new firebase.auth.GoogleAuthProvider();
+      auth.signInWithPopup(provider).catch(error => {
+        console.error('Sign in error:', error);
+        alert('Sign in failed: ' + error.message);
+      });
+    }
+
+    function signOut() {
+      if (auth) {
+        auth.signOut();
+      }
+    }
+
+    // ============================================
+    // RENDER FUNCTIONS
+    // ============================================
+    function render() {
+      const app = document.getElementById('app');
+
+      if (!isConfigured) {
+        app.innerHTML = renderConfigBanner() + renderLoginScreen();
+        attachLoginEvents();
+        return;
+      }
+
+      if (state.loading) {
+        app.innerHTML = '<div class="loading">Loading...</div>';
+        return;
+      }
+
+      if (!state.user) {
+        app.innerHTML = renderLoginScreen();
+        attachLoginEvents();
+        return;
+      }
+
+      app.innerHTML = renderHeader() + renderProgressBar() + renderFilters() + renderStatusFilters() + renderItems();
+
+      if (state.showForm) {
+        app.innerHTML += renderModal();
+      } else {
+        app.innerHTML += '<button class="add-btn" onclick="openForm()">+</button>';
+      }
+
+      attachEvents();
+    }
+
+    function renderConfigBanner() {
+      return `
+        <div class="config-banner">
+          <h3>⚠️ Firebase Setup Required</h3>
+          <p>
+            To use this app, you need to create a Firebase project and add your config.<br><br>
+            1. Go to <a href="https://console.firebase.google.com" target="_blank">Firebase Console</a><br>
+            2. Create a new project (or use existing)<br>
+            3. Enable <strong>Authentication</strong> → Google sign-in<br>
+            4. Enable <strong>Firestore Database</strong><br>
+            5. Go to Project Settings → Your Apps → Add Web App<br>
+            6. Copy the config and replace <code>firebaseConfig</code> in this file
+          </p>
+        </div>
+      `;
+    }
+
+    function renderLoginScreen() {
+      return `
+        <div class="login-screen">
+          <div class="login-icon">📦</div>
+          <h2 class="login-title">Garage Organizer</h2>
+          <p class="login-subtitle">Track and organize your post-move inventory</p>
+          <button class="google-btn" id="google-signin">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
+            Sign in with Google
+          </button>
+        </div>
+      `;
+    }
+
+    function renderHeader() {
+      return `
+        <div class="header">
+          <div>
+            <h1>Garage Organizer</h1>
+            <p class="header-subtitle">${state.items.length} items tracked</p>
+          </div>
+          <div class="user-info">
+            <img src="${state.user.photoURL || ''}" class="user-avatar" alt="">
+            <button class="sign-out-btn" onclick="signOut()">Sign Out</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderProgressBar() {
+      const total = state.items.length;
+      if (total === 0) return '';
+
+      const counts = {
+        keep: state.items.filter(i => i.status === 'Keep').length,
+        sell: state.items.filter(i => i.status === 'Sell').length,
+        donate: state.items.filter(i => i.status === 'Donate').length,
+        dump: state.items.filter(i => i.status === 'Dump').length
+      };
+
+      const sorted = counts.keep + counts.sell + counts.donate + counts.dump;
+
+      return `
+        <div class="progress-bar">
+          <div class="progress-stats">
+            <span>${sorted} of ${total} items sorted</span>
+            <span>${Math.round(sorted / total * 100)}%</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-segment keep" style="width: ${counts.keep / total * 100}%"></div>
+            <div class="progress-segment sell" style="width: ${counts.sell / total * 100}%"></div>
+            <div class="progress-segment donate" style="width: ${counts.donate / total * 100}%"></div>
+            <div class="progress-segment dump" style="width: ${counts.dump / total * 100}%"></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderFilters() {
+      const categoryCounts = {};
+      state.items.forEach(item => {
+        categoryCounts[item.category] = (categoryCounts[item.category] || 0) + 1;
+      });
+
+      let chips = `<button class="filter-chip ${state.categoryFilter === 'all' ? 'active' : ''}" data-category="all">All (${state.items.length})</button>`;
+
+      CATEGORIES.forEach(cat => {
+        if (categoryCounts[cat]) {
+          chips += `<button class="filter-chip ${state.categoryFilter === cat ? 'active' : ''}" data-category="${cat}">${cat.split(' ')[0]} (${categoryCounts[cat]})</button>`;
+        }
+      });
+
+      return `<div class="filter-bar">${chips}</div>`;
+    }
+
+    function renderStatusFilters() {
+      const statusCounts = { all: state.items.length };
+      STATUSES.forEach(s => {
+        statusCounts[s] = state.items.filter(i => i.status === s).length;
+      });
+
+      return `
+        <div class="status-bar">
+          <button class="status-chip ${state.statusFilter === 'all' ? 'active' : ''}" data-status="all">All</button>
+          <button class="status-chip to-sort ${state.statusFilter === 'To Sort' ? 'active' : ''}" data-status="To Sort">To Sort (${statusCounts['To Sort'] || 0})</button>
+          <button class="status-chip keep ${state.statusFilter === 'Keep' ? 'active' : ''}" data-status="Keep">Keep (${statusCounts['Keep'] || 0})</button>
+          <button class="status-chip sell ${state.statusFilter === 'Sell' ? 'active' : ''}" data-status="Sell">Sell (${statusCounts['Sell'] || 0})</button>
+          <button class="status-chip donate ${state.statusFilter === 'Donate' ? 'active' : ''}" data-status="Donate">Donate (${statusCounts['Donate'] || 0})</button>
+          <button class="status-chip dump ${state.statusFilter === 'Dump' ? 'active' : ''}" data-status="Dump">Dump (${statusCounts['Dump'] || 0})</button>
+        </div>
+      `;
+    }
+
+    function renderItems() {
+      let filtered = state.items;
+
+      if (state.categoryFilter !== 'all') {
+        filtered = filtered.filter(item => item.category === state.categoryFilter);
+      }
+
+      if (state.statusFilter !== 'all') {
+        filtered = filtered.filter(item => item.status === state.statusFilter);
+      }
+
+      if (filtered.length === 0) {
+        return `
+          <div class="items-container">
+            <div class="empty-state">
+              <div class="empty-state-icon">📦</div>
+              <p>No items ${state.categoryFilter !== 'all' || state.statusFilter !== 'all' ? 'match your filters' : 'yet'}</p>
+              <p style="font-size: 14px; margin-top: 8px;">Tap the + button to start adding</p>
+            </div>
+          </div>
+        `;
+      }
+
+      const itemCards = filtered.map(item => `
+        <div class="item-card" data-id="${item.id}">
+          <div class="item-header">
+            <h3 class="item-name">${escapeHtml(item.name)}</h3>
+            <button class="item-delete" data-delete="${item.id}">×</button>
+          </div>
+          <div class="item-tags">
+            <span class="tag category">${escapeHtml(item.category)}</span>
+            <span class="tag location">📍 ${escapeHtml(item.location || 'Unassigned')}</span>
+          </div>
+          <div class="decision-buttons">
+            <button class="decision-btn keep ${item.status === 'Keep' ? 'selected' : ''}" data-decision="Keep" data-item="${item.id}">Keep</button>
+            <button class="decision-btn sell ${item.status === 'Sell' ? 'selected' : ''}" data-decision="Sell" data-item="${item.id}">Sell</button>
+            <button class="decision-btn donate ${item.status === 'Donate' ? 'selected' : ''}" data-decision="Donate" data-item="${item.id}">Donate</button>
+            <button class="decision-btn dump ${item.status === 'Dump' ? 'selected' : ''}" data-decision="Dump" data-item="${item.id}">Dump</button>
+          </div>
+          ${item.status === 'Keep' ? `
+            <input type="text" class="destination-input" placeholder="Where will it go? (e.g., Kitchen cabinet)"
+                   value="${escapeHtml(item.destination || '')}" data-destination="${item.id}">
+          ` : ''}
+        </div>
+      `).join('');
+
+      return `<div class="items-container">${itemCards}</div>`;
+    }
+
+    function renderModal() {
+      return `
+        <div class="modal-backdrop" onclick="closeForm()"></div>
+        <div class="modal">
+          <div class="modal-header">
+            <h2 class="modal-title">Quick Add Item</h2>
+            <button class="modal-close" onclick="closeForm()">×</button>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Item Name *</label>
+            <input type="text" class="form-input" id="item-name" placeholder="e.g., Extra blender, Old desk lamp" value="${escapeHtml(state.newItem.name)}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Category</label>
+            <select class="form-select" id="item-category">
+              ${CATEGORIES.map(cat => `<option value="${cat}" ${state.newItem.category === cat ? 'selected' : ''}>${cat}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Current Location</label>
+            <input type="text" class="form-input" id="item-location" placeholder="e.g., Box 1, Garage shelf" value="${escapeHtml(state.newItem.location)}">
+          </div>
+          <button class="submit-btn" id="submit-item">Add Item</button>
+          <p class="form-hint">Category & location are remembered for batch entry</p>
+        </div>
+      `;
+    }
+
+    // ============================================
+    // EVENT HANDLERS
+    // ============================================
+    function attachLoginEvents() {
+      const btn = document.getElementById('google-signin');
+      if (btn) {
+        btn.addEventListener('click', signInWithGoogle);
+      }
+    }
+
+    function attachEvents() {
+      // Category filters
+      document.querySelectorAll('.filter-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          state.categoryFilter = chip.dataset.category;
+          render();
+        });
+      });
+
+      // Status filters
+      document.querySelectorAll('.status-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          state.statusFilter = chip.dataset.status;
+          render();
+        });
+      });
+
+      // Decision buttons
+      document.querySelectorAll('.decision-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          updateItem(btn.dataset.item, { status: btn.dataset.decision });
+        });
+      });
+
+      // Destination inputs
+      document.querySelectorAll('.destination-input').forEach(input => {
+        input.addEventListener('blur', () => {
+          updateItem(input.dataset.destination, { destination: input.value });
+        });
+      });
+
+      // Delete buttons
+      document.querySelectorAll('[data-delete]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (confirm('Delete this item?')) {
+            deleteItem(btn.dataset.delete);
+          }
+        });
+      });
+
+      // Form submit
+      const submitBtn = document.getElementById('submit-item');
+      if (submitBtn) {
+        submitBtn.addEventListener('click', handleSubmit);
+      }
+
+      // Form input tracking
+      const nameInput = document.getElementById('item-name');
+      if (nameInput) {
+        nameInput.focus();
+        nameInput.addEventListener('input', (e) => { state.newItem.name = e.target.value; });
+        nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSubmit(); });
+      }
+
+      const categorySelect = document.getElementById('item-category');
+      if (categorySelect) {
+        categorySelect.addEventListener('change', (e) => { state.newItem.category = e.target.value; });
+      }
+
+      const locationInput = document.getElementById('item-location');
+      if (locationInput) {
+        locationInput.addEventListener('input', (e) => { state.newItem.location = e.target.value; });
+      }
+    }
+
+    function handleSubmit() {
+      const name = state.newItem.name.trim();
+      if (!name) return;
+
+      addItem({
+        name: name,
+        category: state.newItem.category,
+        location: state.newItem.location.trim() || 'Unassigned',
+        status: 'To Sort'
+      });
+
+      state.newItem.name = '';
+      state.showForm = false;
+      render();
+    }
+
+    function openForm() {
+      state.showForm = true;
+      render();
+    }
+
+    function closeForm() {
+      state.showForm = false;
+      render();
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text || '';
+      return div.innerHTML;
+    }
+
+    // ============================================
+    // INIT
+    // ============================================
+    if (isConfigured && auth) {
+      auth.onAuthStateChanged(async (user) => {
+        state.user = user;
+        state.loading = false;
+
+        if (user) {
+          await loadItems();
+        } else {
+          state.items = [];
+        }
+
+        render();
+      });
+    } else {
+      state.loading = false;
+      render();
+    }
+  </script>
+</body>
+</html>
