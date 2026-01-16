@@ -22,12 +22,13 @@ import {
 // ⚠️ SETUP REQUIRED: Replace with your Firebase config
 // Get this from: Firebase Console > Project Settings > Your Apps > Web App
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyCYLA7U5ZQbrQwqYWwlpEWv4urbHInGMLU",
+  authDomain: "dolap-a273a.firebaseapp.com",
+  projectId: "dolap-a273a",
+  storageBucket: "dolap-a273a.firebasestorage.app",
+  messagingSenderId: "759199488291",
+  appId: "1:759199488291:web:09aa231da8ceaa30641496",
+  measurementId: "G-6BHGMVS9CZ"
 };
 
 // Initialize Firebase
