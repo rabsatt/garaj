@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -18,22 +18,33 @@ import {
   orderBy,
   onSnapshot
 } from 'firebase/firestore';
+import {
+  getStorage,
+  ref,
+  uploadBytes,
+  getDownloadURL,
+  deleteObject
+} from 'firebase/storage';
 
 // ⚠️ SETUP REQUIRED: Replace with your Firebase config
-// Get this from: Firebase Console > Project Settings > Your Apps > Web App
 const firebaseConfig = {
-  apiKey: "AIzaSyDu8GnqAj_BQ7UddUA7GYwr70wbM6NXTic",
-  authDomain: "garaj-9f6ac.firebaseapp.com",
-  projectId: "garaj-9f6ac",
-  storageBucket: "garaj-9f6ac.firebasestorage.app",
-  messagingSenderId: "250262045467",
-  appId: "1:250262045467:web:53eec3243853c2932f89be"
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
 };
+
+// Google Cloud Vision API - uses the same API key as Firebase
+// Enable the Cloud Vision API in Google Cloud Console:
+// https://console.cloud.google.com/apis/library/vision.googleapis.com
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const storage = getStorage(app);
 const googleProvider = new GoogleAuthProvider();
 
 const CATEGORIES = [
@@ -60,15 +71,210 @@ const DISPOSITIONS = [
   { value: 'Dump', label: 'Dump', color: '#fee2e2', textColor: '#991b1b', icon: '🗑️' }
 ];
 
+// Image compression settings - targets ~100KB for Firebase free tier optimization
+const MAX_IMAGE_WIDTH = 800;
+const MAX_IMAGE_HEIGHT = 800;
+const JPEG_QUALITY = 0.7;
+
+// Compress image to reduce file size for Firebase Storage
+const compressImage = (file) => {
+  return new Promise((resolve) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+
+    img.onload = () => {
+      let { width, height } = img;
+
+      // Calculate new dimensions maintaining aspect ratio
+      if (width > height) {
+        if (width > MAX_IMAGE_WIDTH) {
+          height = (height * MAX_IMAGE_WIDTH) / width;
+          width = MAX_IMAGE_WIDTH;
+        }
+      } else {
+        if (height > MAX_IMAGE_HEIGHT) {
+          width = (width * MAX_IMAGE_HEIGHT) / height;
+          height = MAX_IMAGE_HEIGHT;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        (blob) => resolve(blob),
+        'image/jpeg',
+        JPEG_QUALITY
+      );
+    };
+
+    img.src = URL.createObjectURL(file);
+  });
+};
+
+// Convert blob to base64 for Claude API
+const blobToBase64 = (blob) => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.readAsDataURL(blob);
+  });
+};
+
+// Category mapping from Vision API labels to our categories
+const mapLabelToCategory = (labels) => {
+  const labelText = labels.map(l => l.description.toLowerCase()).join(' ');
+
+  if (/kitchen|cookware|blender|mixer|pot|pan|utensil|dish|plate|bowl|cup|mug|coffee|appliance/.test(labelText)) {
+    return 'Kitchen Items';
+  }
+  if (/lamp|light|lighting|chandelier|bulb|lantern/.test(labelText)) {
+    return 'Lamps & Lighting';
+  }
+  if (/office|desk|pen|pencil|stapler|paper|notebook|computer|keyboard|mouse|monitor/.test(labelText)) {
+    return 'Office Supplies';
+  }
+  if (/furniture|chair|table|sofa|couch|bed|dresser|cabinet|shelf|bookcase/.test(labelText)) {
+    return 'Furniture';
+  }
+  if (/sport|ball|racket|golf|tennis|bike|bicycle|exercise|fitness|gym/.test(labelText)) {
+    return 'Sporting Goods';
+  }
+  if (/electronic|tv|television|speaker|audio|video|phone|tablet|camera|gaming/.test(labelText)) {
+    return 'Electronics';
+  }
+  if (/tool|hammer|screwdriver|drill|wrench|saw|plier|measure/.test(labelText)) {
+    return 'Tools';
+  }
+  if (/decor|art|picture|frame|vase|sculpture|mirror|decoration|ornament/.test(labelText)) {
+    return 'Decor';
+  }
+  if (/cloth|shirt|pants|dress|shoe|jacket|coat|hat|bag|fashion/.test(labelText)) {
+    return 'Clothing';
+  }
+  if (/book|media|dvd|cd|vinyl|record|magazine|game/.test(labelText)) {
+    return 'Books & Media';
+  }
+  if (/holiday|christmas|halloween|easter|decoration|ornament|festive/.test(labelText)) {
+    return 'Holiday Items';
+  }
+  if (/outdoor|garden|plant|pot|lawn|patio|grill|bbq/.test(labelText)) {
+    return 'Outdoor/Garden';
+  }
+  return 'Other';
+};
+
+// Estimate condition based on image properties (simplified heuristic)
+const estimateCondition = (safeSearch, labels) => {
+  // Default to "Good" as we can't truly assess condition from Vision API
+  return 'Good';
+};
+
+// Call Google Cloud Vision API to identify item
+const identifyItemWithAI = async (imageBase64) => {
+  const response = await fetch(
+    `https://vision.googleapis.com/v1/images:annotate?key=${firebaseConfig.apiKey}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        requests: [
+          {
+            image: {
+              content: imageBase64
+            },
+            features: [
+              { type: 'LABEL_DETECTION', maxResults: 10 },
+              { type: 'OBJECT_LOCALIZATION', maxResults: 5 },
+              { type: 'LOGO_DETECTION', maxResults: 3 },
+              { type: 'TEXT_DETECTION', maxResults: 5 }
+            ]
+          }
+        ]
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    console.error('Vision API error:', error);
+    throw new Error('Failed to identify item');
+  }
+
+  const data = await response.json();
+  const result = data.responses[0];
+
+  // Extract labels (what the item is)
+  const labels = result.labelAnnotations || [];
+  const objects = result.localizedObjectAnnotations || [];
+  const logos = result.logoAnnotations || [];
+  const texts = result.textAnnotations || [];
+
+  // Build item name from detected objects/labels
+  let name = '';
+  if (objects.length > 0) {
+    name = objects[0].name;
+  } else if (labels.length > 0) {
+    name = labels[0].description;
+  }
+
+  // Add brand if detected
+  const brand = logos.length > 0 ? logos[0].description : '';
+  if (brand && !name.toLowerCase().includes(brand.toLowerCase())) {
+    name = `${brand} ${name}`;
+  }
+
+  // Capitalize first letter of each word
+  name = name.replace(/\b\w/g, c => c.toUpperCase());
+
+  // Determine category
+  const category = mapLabelToCategory(labels);
+
+  // Build description from labels
+  const topLabels = labels.slice(0, 5).map(l => l.description).join(', ');
+  const description = topLabels || 'No details detected';
+
+  // Extract any visible text (model numbers, etc.)
+  const visibleText = texts.length > 0 ? texts[0].description.split('\n')[0] : '';
+
+  return {
+    name: name || 'Unknown Item',
+    category,
+    condition: 'Good', // Vision API can't assess condition
+    estimatedValue: '', // Vision API doesn't estimate value - user can fill in
+    description: visibleText ? `${description}. Text visible: "${visibleText}"` : description
+  };
+};
+
 const GarageOrganizer = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState([]);
   const [showForm, setShowForm] = useState(false);
-  const [newItem, setNewItem] = useState({ name: '', category: 'Kitchen Items', location: '' });
+  const [newItem, setNewItem] = useState({
+    name: '',
+    category: 'Kitchen Items',
+    location: '',
+    condition: '',
+    estimatedValue: '',
+    description: ''
+  });
   const [filter, setFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [editingItem, setEditingItem] = useState(null);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState(null);
+  const [expandedItem, setExpandedItem] = useState(null);
+  const fileInputRef = useRef(null);
 
   // Auth state listener
   useEffect(() => {
@@ -117,10 +323,75 @@ const GarageOrganizer = () => {
     }
   };
 
+  const handleImageSelect = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Show preview immediately
+    setImagePreview(URL.createObjectURL(file));
+    setIsAnalyzing(true);
+    setAiSuggestion(null);
+
+    try {
+      // Compress image
+      const compressedBlob = await compressImage(file);
+      setSelectedImage(compressedBlob);
+
+      // Get base64 for AI analysis
+      const base64 = await blobToBase64(compressedBlob);
+
+      // Call Claude Vision API
+      const suggestion = await identifyItemWithAI(base64);
+      setAiSuggestion(suggestion);
+
+      // Auto-fill form with AI suggestions
+      setNewItem(prev => ({
+        ...prev,
+        name: suggestion.name || prev.name,
+        category: CATEGORIES.includes(suggestion.category) ? suggestion.category : prev.category,
+        condition: suggestion.condition || '',
+        estimatedValue: suggestion.estimatedValue || '',
+        description: suggestion.description || ''
+      }));
+    } catch (error) {
+      console.error('Error analyzing image:', error);
+      alert('Could not analyze image. You can still fill in the details manually.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const resetForm = () => {
+    setNewItem({
+      name: '',
+      category: 'Kitchen Items',
+      location: newItem.location, // Keep location for batch entry
+      condition: '',
+      estimatedValue: '',
+      description: ''
+    });
+    setSelectedImage(null);
+    setImagePreview(null);
+    setAiSuggestion(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const addItem = async () => {
     if (!newItem.name.trim() || !user) return;
 
     try {
+      let imageUrl = null;
+
+      // Upload image to Firebase Storage if selected
+      if (selectedImage) {
+        const imageId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const imageRef = ref(storage, `users/${user.uid}/items/${imageId}.jpg`);
+        await uploadBytes(imageRef, selectedImage);
+        imageUrl = await getDownloadURL(imageRef);
+      }
+
       const itemsRef = collection(db, 'users', user.uid, 'items');
       await addDoc(itemsRef, {
         name: newItem.name.trim(),
@@ -128,12 +399,16 @@ const GarageOrganizer = () => {
         location: newItem.location.trim() || 'Unassigned',
         status: 'To Sort',
         destination: '',
+        condition: newItem.condition || '',
+        estimatedValue: newItem.estimatedValue || '',
+        description: newItem.description || '',
+        imageUrl: imageUrl,
         notes: '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });
 
-      setNewItem({ name: '', category: newItem.category, location: newItem.location });
+      resetForm();
       setShowForm(false);
     } catch (error) {
       console.error('Error adding item:', error);
@@ -174,6 +449,19 @@ const GarageOrganizer = () => {
     if (!user) return;
 
     try {
+      // Find item to check for image
+      const item = items.find(i => i.id === itemId);
+
+      // Delete image from storage if exists
+      if (item?.imageUrl) {
+        try {
+          const imageRef = ref(storage, item.imageUrl);
+          await deleteObject(imageRef);
+        } catch (e) {
+          console.log('Image already deleted or not found');
+        }
+      }
+
       const itemRef = doc(db, 'users', user.uid, 'items', itemId);
       await deleteDoc(itemRef);
     } catch (error) {
@@ -197,6 +485,12 @@ const GarageOrganizer = () => {
 
   const getDisposition = (status) => {
     return DISPOSITIONS.find(d => d.value === status) || DISPOSITIONS[0];
+  };
+
+  const getTotalEstimatedValue = (status) => {
+    return items
+      .filter(item => item.status === status && item.estimatedValue)
+      .reduce((sum, item) => sum + (parseFloat(item.estimatedValue) || 0), 0);
   };
 
   // Loading state
@@ -372,6 +666,9 @@ const GarageOrganizer = () => {
             <span key={disp.value} style={{ fontSize: '12px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: disp.textColor }}></span>
               {disp.label}: {getStatusCount(disp.value)}
+              {disp.value === 'Sell' && getTotalEstimatedValue('Sell') > 0 && (
+                <span style={{ color: '#92400e', fontWeight: 500 }}>(~${getTotalEstimatedValue('Sell')})</span>
+              )}
             </span>
           ))}
         </div>
@@ -488,6 +785,7 @@ const GarageOrganizer = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {filteredItems.map(item => {
               const disp = getDisposition(item.status);
+              const isExpanded = expandedItem === item.id;
               return (
                 <div
                   key={item.id}
@@ -499,60 +797,149 @@ const GarageOrganizer = () => {
                     borderLeft: `4px solid ${disp.textColor}`
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    {/* Item Image Thumbnail */}
+                    {item.imageUrl && (
+                      <div
+                        onClick={() => setExpandedItem(isExpanded ? null : item.id)}
+                        style={{
+                          width: '60px',
+                          height: '60px',
+                          borderRadius: '8px',
+                          overflow: 'hidden',
+                          flexShrink: 0,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <img
+                          src={item.imageUrl}
+                          alt={item.name}
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover'
+                          }}
+                        />
+                      </div>
+                    )}
+
                     <div style={{ flex: 1 }}>
-                      <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#1e293b' }}>
-                        {item.name}
-                      </h3>
-                      <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
-                        <span style={{
-                          padding: '4px 10px',
-                          backgroundColor: '#dbeafe',
-                          color: '#1e40af',
-                          borderRadius: '12px',
-                          fontSize: '12px',
-                          fontWeight: 500
-                        }}>
-                          {item.category}
-                        </span>
-                        <span style={{
-                          padding: '4px 10px',
-                          backgroundColor: '#fef3c7',
-                          color: '#92400e',
-                          borderRadius: '12px',
-                          fontSize: '12px',
-                          fontWeight: 500
-                        }}>
-                          📍 {item.location}
-                        </span>
-                        {item.destination && (
-                          <span style={{
-                            padding: '4px 10px',
-                            backgroundColor: '#dcfce7',
-                            color: '#166534',
-                            borderRadius: '12px',
-                            fontSize: '12px',
-                            fontWeight: 500
-                          }}>
-                            → {item.destination}
-                          </span>
-                        )}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div style={{ flex: 1 }}>
+                          <h3
+                            onClick={() => setExpandedItem(isExpanded ? null : item.id)}
+                            style={{
+                              margin: 0,
+                              fontSize: '16px',
+                              fontWeight: 600,
+                              color: '#1e293b',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {item.name}
+                          </h3>
+                          <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
+                            <span style={{
+                              padding: '4px 10px',
+                              backgroundColor: '#dbeafe',
+                              color: '#1e40af',
+                              borderRadius: '12px',
+                              fontSize: '12px',
+                              fontWeight: 500
+                            }}>
+                              {item.category}
+                            </span>
+                            <span style={{
+                              padding: '4px 10px',
+                              backgroundColor: '#fef3c7',
+                              color: '#92400e',
+                              borderRadius: '12px',
+                              fontSize: '12px',
+                              fontWeight: 500
+                            }}>
+                              📍 {item.location}
+                            </span>
+                            {item.estimatedValue && (
+                              <span style={{
+                                padding: '4px 10px',
+                                backgroundColor: '#dcfce7',
+                                color: '#166534',
+                                borderRadius: '12px',
+                                fontSize: '12px',
+                                fontWeight: 500
+                              }}>
+                                ~${item.estimatedValue}
+                              </span>
+                            )}
+                            {item.destination && (
+                              <span style={{
+                                padding: '4px 10px',
+                                backgroundColor: '#dcfce7',
+                                color: '#166534',
+                                borderRadius: '12px',
+                                fontSize: '12px',
+                                fontWeight: 500
+                              }}>
+                                → {item.destination}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => deleteItem(item.id)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            fontSize: '20px',
+                            cursor: 'pointer',
+                            padding: '4px',
+                            opacity: 0.5
+                          }}
+                        >
+                          ×
+                        </button>
                       </div>
                     </div>
-                    <button
-                      onClick={() => deleteItem(item.id)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        fontSize: '20px',
-                        cursor: 'pointer',
-                        padding: '4px',
-                        opacity: 0.5
-                      }}
-                    >
-                      ×
-                    </button>
                   </div>
+
+                  {/* Expanded Details */}
+                  {isExpanded && (
+                    <div style={{
+                      marginTop: '16px',
+                      padding: '12px',
+                      backgroundColor: '#f8fafc',
+                      borderRadius: '8px'
+                    }}>
+                      {item.imageUrl && (
+                        <img
+                          src={item.imageUrl}
+                          alt={item.name}
+                          style={{
+                            width: '100%',
+                            maxHeight: '300px',
+                            objectFit: 'contain',
+                            borderRadius: '8px',
+                            marginBottom: '12px'
+                          }}
+                        />
+                      )}
+                      {item.condition && (
+                        <p style={{ margin: '0 0 8px', fontSize: '14px', color: '#475569' }}>
+                          <strong>Condition:</strong> {item.condition}
+                        </p>
+                      )}
+                      {item.description && (
+                        <p style={{ margin: '0 0 8px', fontSize: '14px', color: '#475569' }}>
+                          <strong>Description:</strong> {item.description}
+                        </p>
+                      )}
+                      {item.estimatedValue && (
+                        <p style={{ margin: '0', fontSize: '14px', color: '#475569' }}>
+                          <strong>Estimated Value:</strong> ${item.estimatedValue}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Decision Buttons */}
                   <div style={{
@@ -677,12 +1064,14 @@ const GarageOrganizer = () => {
           boxShadow: '0 -4px 20px rgba(0,0,0,0.15)',
           padding: '24px 20px',
           paddingBottom: '40px',
-          zIndex: 200
+          zIndex: 200,
+          maxHeight: '90vh',
+          overflowY: 'auto'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Quick Add Item</h2>
+            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Add Item</h2>
             <button
-              onClick={() => setShowForm(false)}
+              onClick={() => { setShowForm(false); resetForm(); }}
               style={{
                 background: 'none',
                 border: 'none',
@@ -696,6 +1085,113 @@ const GarageOrganizer = () => {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Camera/Photo Upload */}
+            <div>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '6px', color: '#475569' }}>
+                📷 Take Photo (AI will identify item)
+              </label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleImageSelect}
+                style={{ display: 'none' }}
+              />
+
+              {!imagePreview ? (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{
+                    width: '100%',
+                    padding: '32px 16px',
+                    fontSize: '16px',
+                    backgroundColor: '#f1f5f9',
+                    color: '#64748b',
+                    border: '2px dashed #cbd5e1',
+                    borderRadius: '12px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <span style={{ fontSize: '32px' }}>📸</span>
+                  <span>Tap to take photo or choose from gallery</span>
+                  <span style={{ fontSize: '12px', color: '#94a3b8' }}>AI will auto-fill item details</span>
+                </button>
+              ) : (
+                <div style={{ position: 'relative' }}>
+                  <img
+                    src={imagePreview}
+                    alt="Preview"
+                    style={{
+                      width: '100%',
+                      maxHeight: '200px',
+                      objectFit: 'contain',
+                      borderRadius: '12px',
+                      border: '2px solid #e2e8f0'
+                    }}
+                  />
+                  {isAnalyzing && (
+                    <div style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      backgroundColor: 'rgba(0,0,0,0.5)',
+                      borderRadius: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'white',
+                      fontSize: '16px',
+                      fontWeight: 500
+                    }}>
+                      🔍 Analyzing with AI...
+                    </div>
+                  )}
+                  <button
+                    onClick={() => { resetForm(); }}
+                    style={{
+                      position: 'absolute',
+                      top: '8px',
+                      right: '8px',
+                      width: '28px',
+                      height: '28px',
+                      borderRadius: '50%',
+                      backgroundColor: 'rgba(0,0,0,0.6)',
+                      color: 'white',
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: '16px'
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* AI Suggestion Banner */}
+            {aiSuggestion && (
+              <div style={{
+                padding: '12px 16px',
+                backgroundColor: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: '10px',
+                fontSize: '14px',
+                color: '#166534'
+              }}>
+                ✨ AI identified: <strong>{aiSuggestion.name}</strong>
+                {aiSuggestion.estimatedValue && (
+                  <span> • Est. value: ${aiSuggestion.estimatedValue}</span>
+                )}
+              </div>
+            )}
+
             <div>
               <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '6px', color: '#475569' }}>
                 Item Name *
@@ -705,7 +1201,6 @@ const GarageOrganizer = () => {
                 value={newItem.name}
                 onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
                 placeholder="e.g., Extra blender, Old desk lamp"
-                autoFocus
                 style={{
                   width: '100%',
                   padding: '14px 16px',
@@ -717,45 +1212,118 @@ const GarageOrganizer = () => {
                 }}
                 onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
                 onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') addItem();
-                }}
               />
             </div>
 
-            <div>
-              <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '6px', color: '#475569' }}>
-                Category
-              </label>
-              <select
-                value={newItem.category}
-                onChange={(e) => setNewItem({ ...newItem, category: e.target.value })}
-                style={{
-                  width: '100%',
-                  padding: '14px 16px',
-                  fontSize: '16px',
-                  border: '2px solid #e2e8f0',
-                  borderRadius: '10px',
-                  outline: 'none',
-                  backgroundColor: 'white',
-                  boxSizing: 'border-box'
-                }}
-              >
-                {CATEGORIES.map(cat => (
-                  <option key={cat} value={cat}>{cat}</option>
-                ))}
-              </select>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '6px', color: '#475569' }}>
+                  Category
+                </label>
+                <select
+                  value={newItem.category}
+                  onChange={(e) => setNewItem({ ...newItem, category: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: '14px 16px',
+                    fontSize: '16px',
+                    border: '2px solid #e2e8f0',
+                    borderRadius: '10px',
+                    outline: 'none',
+                    backgroundColor: 'white',
+                    boxSizing: 'border-box'
+                  }}
+                >
+                  {CATEGORIES.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '6px', color: '#475569' }}>
+                  Condition
+                </label>
+                <select
+                  value={newItem.condition}
+                  onChange={(e) => setNewItem({ ...newItem, condition: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: '14px 16px',
+                    fontSize: '16px',
+                    border: '2px solid #e2e8f0',
+                    borderRadius: '10px',
+                    outline: 'none',
+                    backgroundColor: 'white',
+                    boxSizing: 'border-box'
+                  }}
+                >
+                  <option value="">Select...</option>
+                  <option value="Excellent">Excellent</option>
+                  <option value="Good">Good</option>
+                  <option value="Fair">Fair</option>
+                  <option value="Poor">Poor</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '6px', color: '#475569' }}>
+                  Current Location
+                </label>
+                <input
+                  type="text"
+                  value={newItem.location}
+                  onChange={(e) => setNewItem({ ...newItem, location: e.target.value })}
+                  placeholder="e.g., Box 1"
+                  style={{
+                    width: '100%',
+                    padding: '14px 16px',
+                    fontSize: '16px',
+                    border: '2px solid #e2e8f0',
+                    borderRadius: '10px',
+                    outline: 'none',
+                    boxSizing: 'border-box'
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                  onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
+                />
+              </div>
+
+              <div style={{ width: '120px' }}>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '6px', color: '#475569' }}>
+                  Est. Value $
+                </label>
+                <input
+                  type="number"
+                  value={newItem.estimatedValue}
+                  onChange={(e) => setNewItem({ ...newItem, estimatedValue: e.target.value })}
+                  placeholder="0"
+                  style={{
+                    width: '100%',
+                    padding: '14px 16px',
+                    fontSize: '16px',
+                    border: '2px solid #e2e8f0',
+                    borderRadius: '10px',
+                    outline: 'none',
+                    boxSizing: 'border-box'
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                  onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
+                />
+              </div>
             </div>
 
             <div>
               <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '6px', color: '#475569' }}>
-                Current Location
+                Description (optional)
               </label>
-              <input
-                type="text"
-                value={newItem.location}
-                onChange={(e) => setNewItem({ ...newItem, location: e.target.value })}
-                placeholder="e.g., Box 1, Garage shelf, Near door"
+              <textarea
+                value={newItem.description}
+                onChange={(e) => setNewItem({ ...newItem, description: e.target.value })}
+                placeholder="Brand, size, material, notable features..."
+                rows={2}
                 style={{
                   width: '100%',
                   padding: '14px 16px',
@@ -763,7 +1331,9 @@ const GarageOrganizer = () => {
                   border: '2px solid #e2e8f0',
                   borderRadius: '10px',
                   outline: 'none',
-                  boxSizing: 'border-box'
+                  boxSizing: 'border-box',
+                  resize: 'none',
+                  fontFamily: 'inherit'
                 }}
                 onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
                 onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
@@ -772,21 +1342,21 @@ const GarageOrganizer = () => {
 
             <button
               onClick={addItem}
-              disabled={!newItem.name.trim()}
+              disabled={!newItem.name.trim() || isAnalyzing}
               style={{
                 width: '100%',
                 padding: '16px',
                 fontSize: '16px',
                 fontWeight: 600,
-                backgroundColor: newItem.name.trim() ? '#3b82f6' : '#cbd5e1',
+                backgroundColor: (newItem.name.trim() && !isAnalyzing) ? '#3b82f6' : '#cbd5e1',
                 color: 'white',
                 border: 'none',
                 borderRadius: '10px',
-                cursor: newItem.name.trim() ? 'pointer' : 'not-allowed',
+                cursor: (newItem.name.trim() && !isAnalyzing) ? 'pointer' : 'not-allowed',
                 marginTop: '8px'
               }}
             >
-              Add Item
+              {isAnalyzing ? 'Analyzing...' : 'Add Item'}
             </button>
 
             <p style={{
@@ -795,7 +1365,7 @@ const GarageOrganizer = () => {
               color: '#94a3b8',
               margin: '4px 0 0'
             }}>
-              Category & location stay selected for batch entry
+              Location stays selected for batch entry
             </p>
           </div>
         </div>
@@ -804,7 +1374,7 @@ const GarageOrganizer = () => {
       {/* Backdrop for modal */}
       {showForm && (
         <div
-          onClick={() => setShowForm(false)}
+          onClick={() => { setShowForm(false); resetForm(); }}
           style={{
             position: 'fixed',
             top: 0,
