@@ -28,13 +28,14 @@ import {
 
 // ⚠️ SETUP REQUIRED: Replace with your Firebase config
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyDu8GnqAj_BQ7UddUA7GYwr70wbM6NXTic",
+  authDomain: "garaj-9f6ac.firebaseapp.com",
+  projectId: "garaj-9f6ac",
+  storageBucket: "garaj-9f6ac.firebasestorage.app",
+  messagingSenderId: "250262045467",
+  appId: "1:250262045467:web:53eec3243853c2932f89be"
 };
+
 
 // Google Cloud Vision API - uses the same API key as Firebase
 // Enable the Cloud Vision API in Google Cloud Console:
