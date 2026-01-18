@@ -35,10 +35,6 @@ const firebaseConfig = {
   appId: "1:250262045467:web:53eec3243853c2932f89be"
 };
 
-// Google Cloud Vision API - uses the same API key as Firebase
-// Enable the Cloud Vision API in Google Cloud Console:
-// https://console.cloud.google.com/apis/library/vision.googleapis.com
-
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -125,132 +121,6 @@ const blobToBase64 = (blob) => {
   });
 };
 
-// Category mapping from Vision API labels to our categories
-const mapLabelToCategory = (labels) => {
-  const labelText = labels.map(l => l.description.toLowerCase()).join(' ');
-
-  if (/kitchen|cookware|blender|mixer|pot|pan|utensil|dish|plate|bowl|cup|mug|coffee|appliance/.test(labelText)) {
-    return 'Kitchen Items';
-  }
-  if (/lamp|light|lighting|chandelier|bulb|lantern/.test(labelText)) {
-    return 'Lamps & Lighting';
-  }
-  if (/office|desk|pen|pencil|stapler|paper|notebook|computer|keyboard|mouse|monitor/.test(labelText)) {
-    return 'Office Supplies';
-  }
-  if (/furniture|chair|table|sofa|couch|bed|dresser|cabinet|shelf|bookcase/.test(labelText)) {
-    return 'Furniture';
-  }
-  if (/sport|ball|racket|golf|tennis|bike|bicycle|exercise|fitness|gym/.test(labelText)) {
-    return 'Sporting Goods';
-  }
-  if (/electronic|tv|television|speaker|audio|video|phone|tablet|camera|gaming/.test(labelText)) {
-    return 'Electronics';
-  }
-  if (/tool|hammer|screwdriver|drill|wrench|saw|plier|measure/.test(labelText)) {
-    return 'Tools';
-  }
-  if (/decor|art|picture|frame|vase|sculpture|mirror|decoration|ornament/.test(labelText)) {
-    return 'Decor';
-  }
-  if (/cloth|shirt|pants|dress|shoe|jacket|coat|hat|bag|fashion/.test(labelText)) {
-    return 'Clothing';
-  }
-  if (/book|media|dvd|cd|vinyl|record|magazine|game/.test(labelText)) {
-    return 'Books & Media';
-  }
-  if (/holiday|christmas|halloween|easter|decoration|ornament|festive/.test(labelText)) {
-    return 'Holiday Items';
-  }
-  if (/outdoor|garden|plant|pot|lawn|patio|grill|bbq/.test(labelText)) {
-    return 'Outdoor/Garden';
-  }
-  return 'Other';
-};
-
-// Estimate condition based on image properties (simplified heuristic)
-const estimateCondition = (safeSearch, labels) => {
-  // Default to "Good" as we can't truly assess condition from Vision API
-  return 'Good';
-};
-
-// Call Google Cloud Vision API to identify item
-const identifyItemWithAI = async (imageBase64) => {
-  const response = await fetch(
-    `https://vision.googleapis.com/v1/images:annotate?key=${firebaseConfig.apiKey}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        requests: [
-          {
-            image: {
-              content: imageBase64
-            },
-            features: [
-              { type: 'LABEL_DETECTION', maxResults: 10 },
-              { type: 'OBJECT_LOCALIZATION', maxResults: 5 },
-              { type: 'LOGO_DETECTION', maxResults: 3 },
-              { type: 'TEXT_DETECTION', maxResults: 5 }
-            ]
-          }
-        ]
-      })
-    }
-  );
-
-  if (!response.ok) {
-    const error = await response.json();
-    console.error('Vision API error:', error);
-    throw new Error('Failed to identify item');
-  }
-
-  const data = await response.json();
-  const result = data.responses[0];
-
-  // Extract labels (what the item is)
-  const labels = result.labelAnnotations || [];
-  const objects = result.localizedObjectAnnotations || [];
-  const logos = result.logoAnnotations || [];
-  const texts = result.textAnnotations || [];
-
-  // Build item name from detected objects/labels
-  let name = '';
-  if (objects.length > 0) {
-    name = objects[0].name;
-  } else if (labels.length > 0) {
-    name = labels[0].description;
-  }
-
-  // Add brand if detected
-  const brand = logos.length > 0 ? logos[0].description : '';
-  if (brand && !name.toLowerCase().includes(brand.toLowerCase())) {
-    name = `${brand} ${name}`;
-  }
-
-  // Capitalize first letter of each word
-  name = name.replace(/\b\w/g, c => c.toUpperCase());
-
-  // Determine category
-  const category = mapLabelToCategory(labels);
-
-  // Build description from labels
-  const topLabels = labels.slice(0, 5).map(l => l.description).join(', ');
-  const description = topLabels || 'No details detected';
-
-  // Extract any visible text (model numbers, etc.)
-  const visibleText = texts.length > 0 ? texts[0].description.split('\n')[0] : '';
-
-  return {
-    name: name || 'Unknown Item',
-    category,
-    condition: 'Good', // Vision API can't assess condition
-    estimatedValue: '', // Vision API doesn't estimate value - user can fill in
-    description: visibleText ? `${description}. Text visible: "${visibleText}"` : description
-  };
-};
 
 const GarageOrganizer = () => {
   const [user, setUser] = useState(null);
@@ -270,8 +140,6 @@ const GarageOrganizer = () => {
   const [editingItem, setEditingItem] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [aiSuggestion, setAiSuggestion] = useState(null);
   const [expandedItem, setExpandedItem] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -328,35 +196,14 @@ const GarageOrganizer = () => {
 
     // Show preview immediately
     setImagePreview(URL.createObjectURL(file));
-    setIsAnalyzing(true);
-    setAiSuggestion(null);
 
     try {
-      // Compress image
+      // Compress image for storage
       const compressedBlob = await compressImage(file);
       setSelectedImage(compressedBlob);
-
-      // Get base64 for AI analysis
-      const base64 = await blobToBase64(compressedBlob);
-
-      // Call Claude Vision API
-      const suggestion = await identifyItemWithAI(base64);
-      setAiSuggestion(suggestion);
-
-      // Auto-fill form with AI suggestions
-      setNewItem(prev => ({
-        ...prev,
-        name: suggestion.name || prev.name,
-        category: CATEGORIES.includes(suggestion.category) ? suggestion.category : prev.category,
-        condition: suggestion.condition || '',
-        estimatedValue: suggestion.estimatedValue || '',
-        description: suggestion.description || ''
-      }));
     } catch (error) {
-      console.error('Error analyzing image:', error);
-      alert('Could not analyze image. You can still fill in the details manually.');
-    } finally {
-      setIsAnalyzing(false);
+      console.error('Error processing image:', error);
+      alert('Could not process image. Please try again.');
     }
   };
 
@@ -371,7 +218,6 @@ const GarageOrganizer = () => {
     });
     setSelectedImage(null);
     setImagePreview(null);
-    setAiSuggestion(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -1087,7 +933,7 @@ const GarageOrganizer = () => {
             {/* Camera/Photo Upload */}
             <div>
               <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '6px', color: '#475569' }}>
-                📷 Take Photo (AI will identify item)
+                📷 Add Photo (optional)
               </label>
               <input
                 ref={fileInputRef}
@@ -1118,7 +964,7 @@ const GarageOrganizer = () => {
                 >
                   <span style={{ fontSize: '32px' }}>📸</span>
                   <span>Tap to take photo or choose from gallery</span>
-                  <span style={{ fontSize: '12px', color: '#94a3b8' }}>AI will auto-fill item details</span>
+                  <span style={{ fontSize: '12px', color: '#94a3b8' }}>Photo helps you remember the item</span>
                 </button>
               ) : (
                 <div style={{ position: 'relative' }}>
@@ -1133,25 +979,6 @@ const GarageOrganizer = () => {
                       border: '2px solid #e2e8f0'
                     }}
                   />
-                  {isAnalyzing && (
-                    <div style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      backgroundColor: 'rgba(0,0,0,0.5)',
-                      borderRadius: '12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'white',
-                      fontSize: '16px',
-                      fontWeight: 500
-                    }}>
-                      🔍 Analyzing with AI...
-                    </div>
-                  )}
                   <button
                     onClick={() => { resetForm(); }}
                     style={{
@@ -1173,23 +1000,6 @@ const GarageOrganizer = () => {
                 </div>
               )}
             </div>
-
-            {/* AI Suggestion Banner */}
-            {aiSuggestion && (
-              <div style={{
-                padding: '12px 16px',
-                backgroundColor: '#f0fdf4',
-                border: '1px solid #bbf7d0',
-                borderRadius: '10px',
-                fontSize: '14px',
-                color: '#166534'
-              }}>
-                ✨ AI identified: <strong>{aiSuggestion.name}</strong>
-                {aiSuggestion.estimatedValue && (
-                  <span> • Est. value: ${aiSuggestion.estimatedValue}</span>
-                )}
-              </div>
-            )}
 
             <div>
               <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '6px', color: '#475569' }}>
@@ -1341,21 +1151,21 @@ const GarageOrganizer = () => {
 
             <button
               onClick={addItem}
-              disabled={!newItem.name.trim() || isAnalyzing}
+              disabled={!newItem.name.trim()}
               style={{
                 width: '100%',
                 padding: '16px',
                 fontSize: '16px',
                 fontWeight: 600,
-                backgroundColor: (newItem.name.trim() && !isAnalyzing) ? '#3b82f6' : '#cbd5e1',
+                backgroundColor: newItem.name.trim() ? '#3b82f6' : '#cbd5e1',
                 color: 'white',
                 border: 'none',
                 borderRadius: '10px',
-                cursor: (newItem.name.trim() && !isAnalyzing) ? 'pointer' : 'not-allowed',
+                cursor: newItem.name.trim() ? 'pointer' : 'not-allowed',
                 marginTop: '8px'
               }}
             >
-              {isAnalyzing ? 'Analyzing...' : 'Add Item'}
+              Add Item
             </button>
 
             <p style={{
