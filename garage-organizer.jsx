@@ -26,7 +26,6 @@ import {
   deleteObject
 } from 'firebase/storage';
 
-// ⚠️ SETUP REQUIRED: Replace with your Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyDu8GnqAj_BQ7UddUA7GYwr70wbM6NXTic",
   authDomain: "garaj-9f6ac.firebaseapp.com",
@@ -35,7 +34,6 @@ const firebaseConfig = {
   messagingSenderId: "250262045467",
   appId: "1:250262045467:web:53eec3243853c2932f89be"
 };
-
 
 // Google Cloud Vision API - uses the same API key as Firebase
 // Enable the Cloud Vision API in Google Cloud Console:
